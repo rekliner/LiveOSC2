@@ -133,4 +133,5 @@ class LO2SceneComponent(SceneComponent, LO2Mixin):
 
     def _view(self, msg, src):
         if self._is_scene(msg) and self._scene is not None:
+            self.song().view.selected_scene = self.song().scenes[-1] #this is necessary since the scene 0 might already be selected but not in view
             self.song().view.selected_scene = self._scene

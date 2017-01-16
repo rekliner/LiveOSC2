@@ -15,14 +15,14 @@ class LO2ParameterComponent(ControlSurfaceComponent, LO2Mixin):
 
     def set_parameter(self, param):
         self._parameter = param
-        self._on_value_changed.subject = param
+        #self._on_value_changed.subject = param
 
 
     def set_parameter_value(self, value):
         self._parameter.value = value
     
     
-    @subject_slot('value')
+    #@subject_slot('value')
     def _on_value_changed(self):
         t = self._parameter.canonical_parent.canonical_parent
         tid, ty = self.track_id_type(t)

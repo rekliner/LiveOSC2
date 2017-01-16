@@ -9,7 +9,7 @@ from _Framework.Util import mixin
 from functools import wraps, partial
 import types
 import OSC
-
+import inspect
 
 # -----------------------------------------------------------------
 # This decorator allows us to inject code into framework listeners
@@ -18,6 +18,7 @@ import OSC
 #
 # It will iterate through the class methods searching for ones
 # beginning _lo2_<FrameworkListener>
+
 def _decorate(fn, child, name):
     def wrap(*a, **kw):
         ret = fn(*a, **kw)
@@ -35,17 +36,18 @@ def wrap_init(fn):
         if not hasattr(self, 'liveosc'):
             for m in dir(self):
                 if m.startswith('_lo2_'):
-                    method = getattr(self, m.replace('_lo2_', ''))
-                    child = getattr(self, m)
-                    
-                    # If its a subject slot replace the listener
-                    if hasattr(method, 'function'):
-                        #method.function = _decorate(method.function, child, m)
-                        method.listener = _decorate(method.function, child, m)
-                    
-                    # If its a normal method just overwrite it
-                    else:
-                        setattr(self, m.replace('_lo2_', ''), _decorate(method, child, m))
+                    if False: #ck SILENCE!
+                
+                        method = getattr(self, m.replace('_lo2_', ''))
+                        child = getattr(self, m)
+                        # If its a subject slot replace the listener
+                        if hasattr(method, 'function'):
+                            #method.function = _decorate(method.function, child, m)
+                            method.listener = _decorate(method.function, child, m)
+                        
+                        # If its a normal method just overwrite it
+                        else:
+                            setattr(self, m.replace('_lo2_', ''), _decorate(method, child, m))
 
             self.liveosc = True
 
@@ -61,7 +63,8 @@ class LO2Mixin:
     _subject_slots = []
     _is_enabled_ovr = True
     _registered_callbacks = []
-    
+    _track_names = []
+   
     @staticmethod
     def set_log(func):
         LO2Mixin.log_message = func
@@ -95,11 +98,16 @@ class LO2Mixin:
     
     
     def disconnect(self):
-        self.log_message('Disconnecting instance' + str(self))
-        for cb in self._registered_callbacks:
-            self._osc_handler._callback_manager.rem(cb)
+        self.log_message('Disconnecting instance',self,self._track)
+        #self.log_message(inspect.getmembers(self,inspect.ismethod))
+    #    if self._track is not None:
+    #        for cb in inspect.getmembers(self,predicate=inspect.ismethod):
+    #            if cb[1] in self._registered_callbacks:
+    #                self.log_message('Disconnecting method',cb[1],cb[0])
+    #                self._osc_handler._callback_manager.rem(cb[1])  #the problem seems to be track objects often getting reassigned within live...this will kill callbacks for other tracks! disabling completely leaves phantom track objects but I can live with that for now.
 
-        self.log_message(str(self._osc_handler._callback_manager.callbacks))
+            #self.log_message(str(self._registered_callbacks))
+           # self.log_message(str(self._osc_handler._callback_manager.callbacks))
 
     def add_callback(self, msg, func):
         """ Add a callback for an osc message """
@@ -211,7 +219,35 @@ class LO2Mixin:
     def has_arg(self, msg):
         return not (len(msg) == 2 or (len(msg) == 3 and msg[2] == 'query'))
 
+        
+    def track_id_from_name(self,track_name):
+        try:
+            track_name = int(track_name)
+            return track_name
+        except:
+            tn = [str(track.name).lower() for track in self.song().tracks]
+               #I would love to cache the list of track names and only update it when it changes, this might be too inefficient
+            try:
+                idx = tn.index(track_name.lower())
+            except ValueError:
+                idx = -1
+            #self.log_message("track by name:",track_name,"=",idx)
+            return idx
+            
+    def track_obj_from_name(self,track_name):
+        try:
+            track_name = int(track_name)
+            return self._channel_strips[track_name]
+        except:
+            tn = [str(track._track.name).lower() for track in self._channel_strips]
+            self.log_message("tn",track_name,tn)
+               #I would love to cache the list of track names and only update it when it changes, this might be too inefficient
+            try:
+                idx = tn.index(track_name.lower())
+                self.log_message("found", self._channel_strips[idx], self._channel_strips[idx]._track)
+                return self._channel_strips[idx]
 
-
-
-
+            except ValueError:
+                return None
+            #self.log_message("track by name:",track_name,"=",idx)
+            

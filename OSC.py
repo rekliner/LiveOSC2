@@ -44,6 +44,9 @@ import math
 import string
 import time
 
+from threading import Timer
+import Live
+
 def hexDump(bytes):
     """Useful utility; prints the string in hexadecimal"""
     for i in range(len(bytes)):
@@ -174,6 +177,17 @@ def readFloat(data):
 
     return (float, rest)
 
+def readTime(data):
+    if(len(data)<4):
+        print "Error: too few bytes for int time", data, len(data)
+        rest = data
+        integer = 0
+    else:
+        integer = struct.unpack(">i", data[0:4])[0]
+        rest    = data[4:]
+        
+    return (integer, rest)
+
 def OSCBlob(next):
     """Convert a string into an OSC Blob,
     returning a (typetag, data) tuple."""
@@ -231,12 +245,18 @@ def parseArgs(args):
         except:
             # Oh - it was a string.
             interpretation = arg
+            """
+            if interpretation == "True":
+                interpretation = True
+            if interpretation == "False":
+                interpretation = False
+            """
         parsed.append(interpretation)
     return parsed
 
 def decodeOSC(data):
     """Converts a typetagged OSC message to a Python list."""
-    table = {"i":readInt, "f":readFloat, "s":readString, "b":readBlob}
+    table = {"i":readInt, "f":readFloat, "s":readString, "b":readBlob, "k":readTime}
     decoded = []
     address,  rest = readString(data)
     typetags = ""
@@ -274,20 +294,72 @@ class CallbackManager:
     of decoded OSC arguments, including the address and
     the typetags as the first two arguments."""
 
-    def __init__(self):
+    def __init__(self,parent):
+        self.parent = parent
         self.callbacks = {}
         self.add("#bundle", self.unbundler)
 
     def handle(self, data, source):
         """Given OSC data, tries to call the callback with the right address."""
         decoded = decodeOSC(data)
-        self.dispatch(decoded, source)
+#        self.dispatch(decoded, source, parent)
+        gp = self.parent.parent
+        decoded.append(source)
+        if False and (decoded[1].lower().find('k') >= 0) and (type(self.parent) != None): #making sure this hacked pyOSC has a Ableton API instance to reference
+            if decoded[1].find('k') >= 0: #k is my own OSC tag to indicate the number of bars or beats in ableton to delay a callback command
+                delayBars = int(decoded[1 + decoded[1].lower().find('k')]) #lowercase k = bars, upper = beats
+            else:
+                delayBars = int(decoded[1 + decoded[1].find('K')]) / gp.song().signature_numerator # upper = beats
+            #self.log_message("timer launching",self.song().current_song_time,msg[5],msg[0:len(msg) - 1])
+            secPerBar = gp.song().signature_numerator / (gp.song().tempo / 60.0)
+            secToNextBar = (gp.song().signature_numerator - (gp.song().current_song_time % gp.song().signature_numerator)) * secPerBar / gp.song().signature_numerator
+            secDelay = delayBars * secPerBar + secToNextBar + .01
+            #self.log_message(secPerBar,secToNextBar,secDelay)
+            self.parent.log_message('OSC Delay! bars = ',delayBars,"secs=",secDelay, "tempo=",gp.song().tempo,"msg=",str(decoded))
+            #Timer(secDelay, self._clip_slot.fire,[msg[4]]).start()
+            decoded[1] = decoded[1][0:-1] #kill the k
+            decoded.pop(-2)
+            Timer(secDelay, self.parent._callback_manager.dispatch,[decoded]).start()
+            #Timer(secDelay, self.dispatch,[decoded]).start()
+            
+        else:
+            #parent.log_message('OSC: ',str(decoded))
+            self.dispatch(decoded)
 
-    def dispatch(self, message, source):
+    def dispatch(self, message):
         """Sends decoded OSC data to an appropriate calback"""
+
+        
+        self.parent.log_message('dispatch: ',message)
+        delayMsg = False
+        if (message[1].lower().find('k') >= 0) and (type(self.parent) != None): #making sure this hacked pyOSC has a Ableton API instance to reference
+            gp = self.parent.parent
+            if message[1].find('k') >= 0: #k is my own OSC tag to indicate the number of bars or beats in ableton to delay a callback command
+                delayBars = int(message[1 + message[1].lower().find('k')]) #lowercase k = bars, upper = beats
+            else:
+                delayBars = int(message[1 + message[1].find('K')]) / gp.song().signature_numerator # upper = beats
+            #self.log_message("timer launching",self.song().current_song_time,msg[5],msg[0:len(msg) - 1])
+            secPerBar = gp.song().signature_numerator / (gp.song().tempo / 60.0)
+            secToNextBar = (gp.song().signature_numerator - (gp.song().current_song_time % gp.song().signature_numerator)) * secPerBar / gp.song().signature_numerator
+            secDelay = delayBars * secPerBar + secToNextBar + .01
+            #self.log_message(secPerBar,secToNextBar,secDelay)
+            self.parent.log_message('OSC Delay! bars = ',delayBars,"secs=",secDelay, "tempo=",gp.song().tempo,"msg=",str(message))
+            #Timer(secDelay, self._clip_slot.fire,[msg[4]]).start()
+            message[1] = message[1][0:-1] #kill the k
+            message.pop(-2)
+            #Timer(secDelay, self.parent._callback_manager.dispatch,[message]).start()
+            #Timer(secDelay, self.dispatch,[message]).start()
+            delayMsg = True
+
+        source = message.pop()
         address = message[0]
         for cb in self.callbacks[address]:
-            cb(message, source)
+            if delayMsg:
+                Live.Base.Timer(cb(message,source),long(secDelay)).start()
+                #Timer(secDelay, cb,[message,source]).start()
+            else:
+                cb(message, source)
+
 
     def add(self, address, callback):
         """Adds a callback to our set of callbacks,
@@ -306,6 +378,7 @@ class CallbackManager:
         for addr, cbs in self.callbacks.iteritems():
             for c in cbs:
                 if c == callback:
+                    #self.parent.log_message("rem:",addr,callback,c == callback,callback,c)
                     self.callbacks[addr].remove(c)
 
 
@@ -313,7 +386,8 @@ class CallbackManager:
         """Dispatch the messages in a decoded bundle."""
         # first two elements are #bundle and the time tag, rest are messages.
         for message in messages[2:]:
-            self.dispatch(message, source)
+            message.append(source)
+            self.dispatch(message)
 
 if __name__ == "__main__":
     hexDump("Welcome to the OSC testing program.")
@@ -396,7 +470,7 @@ if __name__ == "__main__":
 
     print "Testing the callback manager."
     
-    c = CallbackManager()
+    c = CallbackManager(None)
     c.add("/print", printingCallback)
     
     c.handle(message.getBinary(), None)

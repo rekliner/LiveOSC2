@@ -9,7 +9,8 @@ from LO2Mixin import LO2Mixin
 class LO2DeviceComponent(DeviceComponent, LO2Mixin):
 
 
-    def __init__(self):
+    def __init__(self,parent):
+        self.parent = parent
         self._parameters = []
         super(LO2DeviceComponent, self).__init__()
 
@@ -22,19 +23,21 @@ class LO2DeviceComponent(DeviceComponent, LO2Mixin):
 
 
     def _is_device(self, msg):
+        #msg = address,types,
         if 'return' in msg[0]:
             ty = 1
         elif 'master' in msg[0]:
             ty = 2
         else:
             ty = 0
-
         d = msg[2] if ty == 2 else msg[3]
-        check_id = msg[2] == self._track_id if self._type != 2 else True
-
-        return check_id and self._type == ty and d == self._device_id
-
-
+        check_id = self.track_id_from_name(msg[2]) == self._track_id if self._type != 2 else True
+        if check_id and self._type == ty:
+            self.log_message("is device",msg[2],self.parent.name,self._type,ty)
+            return self.device_id_from_name(d,self._track_id) == self._device_id
+        else:
+            return False
+            
     def set_device(self, device):
         self.log_message('set device')
         super(LO2DeviceComponent, self).set_device(device)
@@ -42,8 +45,8 @@ class LO2DeviceComponent(DeviceComponent, LO2Mixin):
         self._track_id, self._type = self.track_id_type(device.canonical_parent)
         self._device_id = list(device.canonical_parent.devices).index(device)
 
-        self._on_parameters_changed.subject = device
-        self._on_parameters_changed()
+        #self._on_parameters_changed.subject = device
+        #self._on_parameters_changed()
 
 
     @subject_slot('parameters')
@@ -63,7 +66,7 @@ class LO2DeviceComponent(DeviceComponent, LO2Mixin):
         for i,pc in enumerate(self._parameters):
             pc.set_parameter(self._device.parameters[i])
 
-
+        #self.parent.parent.parent.cc_remap()
 
 
     def _device_range(self, msg, src):
@@ -101,6 +104,7 @@ class LO2DeviceComponent(DeviceComponent, LO2Mixin):
 
     def _device_param(self, msg, src):
         if self._is_device(msg) and self._device is not None:
+            self.log_message("param",msg)
             if self._type == 2:
                 p = msg[3] if len(msg) >= 4 else None
                 v = msg[4] if len(msg) >= 5 else None
@@ -108,13 +112,20 @@ class LO2DeviceComponent(DeviceComponent, LO2Mixin):
                 p = msg[4] if len(msg) >= 5 else None
                 v = msg[5] if len(msg) >= 6 else None
 
+                
             if p is not None:
+                p = self.parameter_id_from_name(p)
                 if p < len(self._device.parameters):
                     prm = self._device.parameters[p]
 
                     # If a parameter value was passed, set it.
                     if v is not None:
                         prm.value = v
+                        try:
+                            self.log_message('param name',prm,prm.value,prm.name)
+                        except:
+                            pass
+                        
 
                     # Send the current value of the parameter.
                     # type 2 = master track
@@ -159,5 +170,59 @@ class LO2DeviceComponent(DeviceComponent, LO2Mixin):
 
             if p < len(self._device.parameters) and t is not None:
                 prm = self._device.parameters[p]
+                
 
-
+    def device_id_from_name(self,device_name,track_id):
+        try:
+            device_id = int(device_name)
+            self.log_message("device by number",device_id)
+            return device_id
+        except:
+            lc_devices = [dn.name.lower() for dn in self.song().tracks[track_id].devices]
+            try:
+                self.log_message("device by name",device_name.lower(),lc_devices.index(device_name.lower()),lc_devices)
+                return lc_devices.index(device_name.lower())
+            except ValueError:
+                self.log_message("device by name: name not found",device_name,lc_devices)
+                return 0 # maybe i should let this be an error rather than default to 0, the first device
+    
+    def device_obj_from_name(self,device_name):
+        try:
+            device_id = int(device_name)
+            self.log_message("device by number",device_id)
+            return self._parent._track._devices[device_id]
+        except:
+        
+            lc_devices = [dn.name.lower() for dn in self.parent._track.devices]
+            try:
+                self.log_message("device by name",device_name.lower(),lc_devices.index(device_name.lower()),lc_devices)
+                return self.parent._devices[lc_devices.index(device_name.lower())]
+            except ValueError:
+                self.log_message("device by name: name not found",device_name,lc_devices)
+                return None # maybe i should let this be an error rather than default to 0, the first device
+    
+    def parameter_id_from_name(self,param):
+        try:
+            param = int(param)
+            return param
+        except:
+            lc_parameters = [p.name.lower() for p in self._device.parameters]
+            try:
+                self.log_message("param by name",param.lower(),lc_parameters.index(param.lower()),lc_parameters)
+                return lc_parameters.index(param.lower())
+            except ValueError:
+                self.log_message("param by name: name not found",param,lc_parameters)
+                return 0 # maybe i should let this be an error rather than default to 0, the first param
+                
+    def parameter_obj_from_name(self,param):
+        try:
+            param = int(param)
+            return self._device.parameters[param]
+        except:
+            lc_parameters = [p.name.lower() for p in self._device.parameters]
+            try:
+                self.log_message("param by name",param.lower(),lc_parameters.index(param.lower()),lc_parameters)
+                return self._device.parameters[lc_parameters.index(param.lower())]
+            except ValueError:
+                self.log_message("param by name: name not found",param,lc_parameters)
+                return None # maybe i should let this be an error rather than default to 0, the first param

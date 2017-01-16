@@ -1,4 +1,5 @@
 import Live
+from threading import Timer
 
 from _Framework.ClipSlotComponent import ClipSlotComponent
 from _Framework.SubjectSlot import subject_slot
@@ -22,19 +23,25 @@ class LO2ClipSlotComponent(ClipSlotComponent, LO2Mixin):
         self._track_id = tid
         self._scene_id = sid
         
-        
         super(LO2ClipSlotComponent, self).__init__(*a, **k)
     
         self.set_default('_track_id', '_scene_id')
     
-        callbacks = {'color': 'color', 'name': 'name', 'warping': 'warping', 'looping': 'looping', 'loopstart': 'loop_start', 'loopend': 'loop_end', 'start': 'start_marker', 'end': 'end_marker', 'loopjump': 'loop_jump'}
-        for n,p in callbacks.iteritems():
-            self.add_simple_callback('/live/clip/'+n, '_clip_slot.clip', p, self._is_clip, getattr(self, '_on_clip_'+n+'_changed'))
+        #callbacks = {'color': 'color', 'name': 'name', 'warping': 'warping', 'looping': 'looping', 'loopstart': 'loop_start', 'loopend': 'loop_end', 'start': 'start_marker', 'end': 'end_marker', 'loopjump': 'loop_jump'}
+        #for n,p in callbacks.iteritems():
+        #   self.add_simple_callback('/live/clip/'+n, '_clip_slot.clip', p, self._is_clip, getattr(self, '_on_clip_'+n+'_changed'))
     
-        self.add_callback('/live/clip/play', self._fire)
+        self.add_callback('/live/clip/play', self._play)
+        self.add_callback('/live/clip/rec', self._rec)
+        self.add_callback('/live/clip/record', self._rec)
         self.add_callback('/live/clip/stop', self._stop)
         self.add_callback('/live/clip/pitch', self._pitch)
         self.add_callback('/live/clip/select', self._view)
+        self.add_callback('/live/clip/double', self._double)
+        self.add_callback('/live/clip/loop/end', self._loop_end)
+        self.add_callback('/live/clip/loop/start', self._loop_start)
+        self.add_callback('/live/clip/looping', self._looping)
+        self.add_callback('/live/clip/delete', self._delete)
 
 
 
@@ -53,8 +60,14 @@ class LO2ClipSlotComponent(ClipSlotComponent, LO2Mixin):
     
     
     def _is_clip(self, msg):
+        
         if len(msg) >= 4:
-            return msg[2] == self._track_id and msg[3] == self._scene_id
+            try: 
+                int(msg[2])
+            except ValueError:
+                msg[2] = self.track_id_from_name(msg[2])
+                #self.log_message('clip track by name! ' + str(msg[2]) + str(self._track_names))
+            return msg[2] == self._track_id and (msg[3] - 1) == self._scene_id
 
 
     # Properties
@@ -120,7 +133,7 @@ class LO2ClipSlotComponent(ClipSlotComponent, LO2Mixin):
         self.send('/live/clip/state', self._track_id, self._scene_id, state)
 
     
-    
+    """ #these drive me F*ing crazy
     def _lo2__on_clip_color_changed(self):
         self.send_default('/live/clip/color', self._clip_slot.clip.color)
     
@@ -162,22 +175,112 @@ class LO2ClipSlotComponent(ClipSlotComponent, LO2Mixin):
     def _on_clip_gain_changed(self):
         self.send_default('/live/clip/gain', self._clip_slot.clip.gain)
     
-
-
+    """
+    
+    def __len__(self):
+         return 0
+         
     # Callbacks
     def _fire(self, msg, src):
+        #address, types, trackid, slotid, [delay in seconds]
         if self._clip_slot is not None and self._is_clip(msg):
+            self.log_message("firing",msg,src,self._clip_slot)
             if self._clip_slot.has_clip:
                 self._clip_slot.clip.fire()
             else:
                 self._clip_slot.fire()
+                    
+    def _play(self, msg, src):
+        #address, types, trackid, slotid, [delay in seconds]
+        if self._clip_slot is not None and self._is_clip(msg):
+            self.log_message("playing",msg,src,self._clip_slot,self._clip_slot.is_playing,self._clip_slot.clip.is_playing)
+            if self._clip_slot.has_clip:
+                if not self._clip_slot.is_playing:
+                    self._clip_slot.clip.fire()
+                else:
+                    self._clip_slot.clip.position(0) #probably need to quantize
+    
+    def _rec(self, msg, src):
+        #msg format: address, types, trackid, sceneid, 'bars' or 'beats', bars to record
+        if self._clip_slot is not None and self._is_clip(msg):
+            self.log_message("cliprec:",msg,src,self._clip_slot)
+            #f = open('C:\Users\Stage\Documents\cklog.txt','a')
+            #f.write(str(msg) + str(self._clip_slot) + str( self._clip_slot.has_clip) + '\n') # python will convert \n to os.linesep
+            #f.close() # you can omit in most cases as the destructor will call it            
+            autoarm = False
+            if self._clip_slot.canonical_parent.arm == 0:
+                self._clip_slot.canonical_parent.arm = 1
+                #autoarm = True
+            if not self._clip_slot.has_clip:
+                try:
+                    if (msg[4] != 'beats'):
+                        msg[5] *= self.song().signature_numerator
+                    self._clip_slot.fire(msg[5])
+                    
+                    if autoarm:
+                        secPerBar = self.song().signature_numerator / (self.song().tempo / 60)
+                        secToNextBar = (self.song().signature_numerator - (self.song().current_song_time % self.song().signature_numerator)) * secPerBar / self.song().signature_numerator
+                        secDelay = (msg[5] / self.song().signature_numerator) * secPerBar + secToNextBar + .01
+                        self.log_message('Delay disarm! beats = ',msg[5],"secs=",secDelay, "tempo=",self.song().tempo,"msg=",msg)
+                        #for cb in self.callbacks['live/track/arm']:
+                        #self._cliparm(['live/track/arm',',ii',msg[2],0])
+                        Timer(secDelay, self._cliparm,[['live/track/arm',',ii',msg[2],0],0]).start() #im stuck here, why wont this timer execute?
 
+                        
+                        #timer to disable autoarm.
+                except:
+                    self._clip_slot.fire()
+            elif not self._clip_slot.clip.is_playing:
+                self._clip_slot.clip.fire()
+            else:
+                pass
+                #restart the clip?  cant be done easily...relies on clip launch mode which i want to keep on toggle...would  double tap work?
+                
+
+    def _cliparm(self, msg, src=None):
+        self.log_message("arm triggered",msg)
+        if self._clip_slot is not None and self._is_clip(msg):
+            self.log_message("arm",self._clip_slot.canonical_parent.name, self._clip_slot.canonical_parent.arm, msg)
+            self._clip_slot.canonical_parent.arm = msg[3]
+            
     def _stop(self, msg, src):
         if self._clip_slot is not None and self._is_clip(msg):
             if self._clip_slot.has_clip:
                 self._clip_slot.clip.stop()
             else:
                 self._clip_slot.stop()
+
+    def _double(self, msg, src):
+        if self._clip_slot is not None and self._is_clip(msg):
+            if self._clip_slot.has_clip:
+                self._clip_slot.clip.duplicate_loop()
+
+    def _loop_end(self, msg, src):
+        if self._clip_slot is not None and self._is_clip(msg):
+            if self._clip_slot.has_clip:
+                if self._clip_slot.clip.is_playing:
+                    #hack to try to keep playing clip in sync while changing loop end
+                    self._clip_slot.clip.loop_end = msg[4]
+                    self._clip_slot.clip.position = 0 #this will do for now, just execute on the beat
+                else:
+                    if self._clip_slot.clip.loop_end != msg[4]:  #weird ableton behavior if loopend is set to its current position
+                        self._clip_slot.clip.loop_end = msg[4]
+
+    def _loop_start(self, msg, src):
+        if self._clip_slot is not None and self._is_clip(msg):
+            if self._clip_slot.has_clip:
+                if self._clip_slot.clip.loop_start != msg[4]:
+                    self._clip_slot.clip.loop_start = msg[4] 
+
+    def _looping(self, msg, src):
+        if self._clip_slot is not None and self._is_clip(msg):
+            if self._clip_slot.has_clip:
+                self._clip_slot.clip.looping = msg[4] 
+
+    def _delete(self, msg, src):
+        if self._clip_slot is not None and self._is_clip(msg):
+            if self._clip_slot.has_clip:
+                self._clip_slot.delete_clip()
 
     @with_clip
     def _pitch(self, msg, src):
